@@ -7,7 +7,13 @@ Keys: 1-9 tabs │ / search │ L lookup │ R refresh │ Q quit
 """
 from __future__ import annotations
 
-import fcntl
+try:
+    import fcntl
+except ModuleNotFoundError:
+    class _FcntlShim:
+        LOCK_EX = LOCK_UN = LOCK_SH = LOCK_NB = 0
+        def flock(self, *a, **kw): pass
+    fcntl = _FcntlShim()
 import copy
 import json as _json
 import logging

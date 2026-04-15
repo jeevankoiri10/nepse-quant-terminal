@@ -12,10 +12,14 @@ import os
 import re
 import sqlite3
 import sys
-import termios
+try:
+    import termios
+    import tty
+except ModuleNotFoundError:
+    termios = None
+    tty = None
 import threading
 import time
-import tty
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional

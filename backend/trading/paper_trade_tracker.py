@@ -1,5 +1,11 @@
 import argparse
-import fcntl
+try:
+    import fcntl
+except ModuleNotFoundError:
+    class _FcntlShim:
+        LOCK_EX = LOCK_UN = LOCK_SH = LOCK_NB = 0
+        def flock(self, *a, **kw): pass
+    fcntl = _FcntlShim()
 import logging
 import os
 from datetime import datetime
