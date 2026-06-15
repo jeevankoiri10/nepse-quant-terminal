@@ -82,6 +82,30 @@ def _check_data_freshness(max_stale_days: int = 7) -> tuple[bool, str]:
     return _status(True, "Data freshness", detail)
 
 
+def _check_active_agent() -> tuple[bool, str]:
+    """Is the *selected* agent backend ready to run? Reuses agent_doctor so the
+    launch preflight surfaces a misconfigured agent (missing dep / CLI / server)
+    up front. Informational: the dashboard launches without a working agent, so
+    a not-ready backend is reported, not a hard fail. `agent doctor` has detail."""
+    try:
+        from scripts.agent_doctor import build_agent_status
+
+        status = build_agent_status()
+    except Exception as exc:  # noqa: BLE001 - never let this check break the preflight
+        return _status(True, "Active agent", f"could not resolve: {exc}")
+
+    backend = status.get("backend") or "?"
+    failed = status.get("failed") or []
+    if failed:
+        return _status(
+            True, "Active agent",
+            f"{backend}: NOT ready ({', '.join(failed)}) - run python -m scripts.agent doctor",
+        )
+    warned = status.get("warned") or []
+    note = f" (warnings: {', '.join(warned)})" if warned else ""
+    return _status(True, "Active agent", f"{backend}: ready{note}")
+
+
 def _check_runtime_writable() -> tuple[bool, str]:
     runtime = ensure_dir(get_runtime_dir(__file__))
     probe = runtime / ".windows_preflight_write_test"
@@ -128,6 +152,7 @@ def main() -> int:
         _check_runtime_writable(),
         _check_timezone(),
         _check_optional_agents(),
+        _check_active_agent(),
     ]
     for _, line in checks:
         print(line)
