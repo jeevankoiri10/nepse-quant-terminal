@@ -116,7 +116,10 @@ def _get_basin_rainfall(
             return None
 
         return df
-    except sqlite3.Error as e:
+    except (sqlite3.Error, pd.errors.DatabaseError) as e:
+        # pandas raises DatabaseError (not sqlite3.Error) when weather_data is
+        # missing; catch both so a missing table degrades to None rather than
+        # crashing the signal generator.
         logger.warning(f"DB error fetching weather for {basin}: {e}")
         return None
 
