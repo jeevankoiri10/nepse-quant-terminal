@@ -125,8 +125,36 @@ def _backend_checks(backend: str) -> list[dict[str, Any]]:
     return [_check("backend", WARN, f"unknown backend '{backend}' - no readiness checks defined")]
 
 
-def build_agent_status(backend: str | None = None) -> dict[str, Any]:
-    """Resolve the backend (active config unless overridden) and run its checks."""
+def _probe_check(backend: str) -> dict[str, Any] | None:
+    """Live readiness: make one trivial call and confirm the backend answers.
+
+    Returns None for backends with no probe defined (ollama already has a port
+    check; gemma is a local model load). For the Claude backends this reuses the
+    real call path, so a failure carries the same actionable message the backend
+    returns (e.g. "run `claude login`"). Only invoked under --probe.
+    """
+    backend = (backend or "").strip().lower()
+    if backend not in ("claude_sdk", "claude"):
+        return None
+    from backend.agents import agent_analyst
+
+    fn = agent_analyst._call_claude_sdk if backend == "claude_sdk" else agent_analyst._call_claude
+    try:
+        resp = fn("Reply with the single word: ok")
+    except Exception as exc:  # noqa: BLE001 - surface any call failure as a probe FAIL
+        return _check("live call", FAIL, f"probe raised: {exc}")
+    text = str(resp).strip()
+    if text.startswith("ERROR:"):
+        return _check("live call", FAIL, text[len("ERROR:"):].strip())
+    return _check("live call", OK, "backend answered a test prompt")
+
+
+def build_agent_status(backend: str | None = None, *, probe: bool = False) -> dict[str, Any]:
+    """Resolve the backend (active config unless overridden) and run its checks.
+
+    With ``probe=True``, and only if no static check FAILed, make one trivial
+    live call to confirm the backend actually responds (auth valid, reachable).
+    """
     from backend.agents.runtime_config import AGENT_BACKEND_PRESETS, load_active_agent_config
 
     if backend:
@@ -141,6 +169,10 @@ def build_agent_status(backend: str | None = None) -> dict[str, Any]:
         selected = str(cfg.get("selected_preset") or resolved)
 
     checks = _backend_checks(resolved)
+    if probe and not any(c["status"] == FAIL for c in checks):
+        live = _probe_check(resolved)
+        if live is not None:
+            checks.append(live)
     return {
         "selected_preset": selected,
         "backend": resolved,
@@ -180,9 +212,14 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="check a specific preset (ollama|gemma4_mlx|claude|claude_sdk) instead of the active one",
     )
+    parser.add_argument(
+        "--probe",
+        action="store_true",
+        help="also make ONE live call to confirm the backend answers (Claude backends; uses your quota)",
+    )
     args = parser.parse_args(argv)
 
-    status = build_agent_status(args.backend)
+    status = build_agent_status(args.backend, probe=args.probe)
     if args.json:
         print(json.dumps(status, indent=2, sort_keys=True))
     else:
