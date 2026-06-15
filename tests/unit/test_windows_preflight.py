@@ -78,6 +78,38 @@ def test_optional_agents_reports_all_four_backends(monkeypatch):
     assert "mlx_vlm=no" in line       # find_spec returned None
 
 
+def test_active_agent_ready(monkeypatch):
+    monkeypatch.setattr(
+        "scripts.agent_doctor.build_agent_status",
+        lambda: {"backend": "ollama", "failed": [], "warned": []},
+    )
+    ok, line = wp._check_active_agent()
+    assert ok is True
+    assert "ollama: ready" in line
+
+
+def test_active_agent_not_ready_is_reported_but_not_fatal(monkeypatch):
+    monkeypatch.setattr(
+        "scripts.agent_doctor.build_agent_status",
+        lambda: {"backend": "claude_sdk", "failed": ["sdk package"], "warned": []},
+    )
+    ok, line = wp._check_active_agent()
+    assert ok is True  # informational - the dashboard still launches
+    assert "claude_sdk: NOT ready" in line
+    assert "sdk package" in line
+    assert "scripts.agent doctor" in line
+
+
+def test_active_agent_never_breaks_the_preflight(monkeypatch):
+    def _boom():
+        raise RuntimeError("config blew up")
+
+    monkeypatch.setattr("scripts.agent_doctor.build_agent_status", _boom)
+    ok, line = wp._check_active_agent()
+    assert ok is True
+    assert "could not resolve" in line
+
+
 def test_freshness_is_wired_into_main_checks(monkeypatch, tmp_path):
     # the new check must actually run as part of the preflight
     db = tmp_path / "market.db"
