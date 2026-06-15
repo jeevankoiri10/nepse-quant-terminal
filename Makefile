@@ -64,3 +64,16 @@ agent-doctor:
 agent-use:
 	@if [ -z "$(PRESET)" ]; then echo "Usage: make agent-use PRESET=claude_sdk [MODEL=opus]"; exit 1; fi
 	$(PYTHON) -m scripts.agent use $(PRESET) $(if $(MODEL),--model $(MODEL),)
+
+# --- Tests (run what CI runs) ---
+.PHONY: test test-agents
+
+# Full unit suite - identical to the Python CI job (.github/workflows/python-ci.yml).
+test:
+	$(PYTHON) -m pytest tests/unit -q
+
+# Fast feedback loop for the agent layer only.
+test-agents:
+	$(PYTHON) -m pytest tests/unit/test_agent_bridge.py tests/unit/test_agent_doctor.py \
+		tests/unit/test_agent_status.py tests/unit/test_agent_cli.py \
+		tests/unit/test_agent_use.py tests/unit/test_agent_runtime_config.py -q
