@@ -5,9 +5,11 @@ Instead of remembering each module path, run everything through one command:
 
     python -m scripts.agent status   [--json]
     python -m scripts.agent doctor   [--json] [--backend <preset>]
+    python -m scripts.agent use <preset> [--model <name>]
 
   status  what backend/model is active, and what presets you can switch to
   doctor  whether the active backend's prerequisites are actually in place
+  use     switch the active backend (persists the choice)
 
 Subcommands delegate to each tool's main() verbatim (same flags, same exit
 codes). Read-only: the dispatcher adds no behaviour of its own.
@@ -27,6 +29,10 @@ _SUBCOMMANDS: dict[str, tuple[str, Callable[[], Callable[[list[str]], int]]]] = 
     "doctor": (
         "readiness check for the active backend",
         lambda: __import__("scripts.agent_doctor", fromlist=["main"]).main,
+    ),
+    "use": (
+        "switch the active backend (persists the choice)",
+        lambda: __import__("scripts.agent_use", fromlist=["main"]).main,
     ),
 }
 
