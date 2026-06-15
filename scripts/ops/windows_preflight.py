@@ -103,11 +103,19 @@ def _check_timezone() -> tuple[bool, str]:
 
 
 def _check_optional_agents() -> tuple[bool, str]:
-    ollama = shutil.which("ollama")
-    mlx = importlib.util.find_spec("mlx_vlm")
-    bits = []
-    bits.append(f"ollama={'yes' if ollama else 'no'}")
-    bits.append(f"mlx_vlm={'yes' if mlx else 'no'}")
+    """Report which optional agent backends are available, in sync with the
+    selectable presets (ollama / gemma-mlx / claude CLI / claude_sdk). Always
+    informational - none is required to launch the dashboard."""
+
+    def _yes_no(present: object) -> str:
+        return "yes" if present else "no"
+
+    bits = [
+        f"ollama={_yes_no(shutil.which('ollama'))}",
+        f"mlx_vlm={_yes_no(importlib.util.find_spec('mlx_vlm'))}",
+        f"claude_cli={_yes_no(shutil.which('claude'))}",
+        f"claude_sdk={_yes_no(importlib.util.find_spec('claude_agent_sdk'))}",
+    ]
     return _status(True, "Optional agents", ", ".join(bits))
 
 

@@ -59,6 +59,25 @@ def test_freshness_flags_stale_data(monkeypatch, tmp_path):
     assert "STALE" in line
 
 
+def test_optional_agents_reports_all_four_backends(monkeypatch):
+    # the optional-agents line must reflect every selectable backend family,
+    # including the claude CLI and claude_sdk added with the SDK backend
+    monkeypatch.setattr(
+        wp.shutil, "which",
+        lambda name: f"/usr/bin/{name}" if name in {"ollama", "claude"} else None,
+    )
+    monkeypatch.setattr(
+        wp.importlib.util, "find_spec",
+        lambda mod: object() if mod == "claude_agent_sdk" else None,
+    )
+    ok, line = wp._check_optional_agents()
+    assert ok is True
+    assert "ollama=yes" in line
+    assert "claude_cli=yes" in line
+    assert "claude_sdk=yes" in line   # find_spec returned truthy
+    assert "mlx_vlm=no" in line       # find_spec returned None
+
+
 def test_freshness_is_wired_into_main_checks(monkeypatch, tmp_path):
     # the new check must actually run as part of the preflight
     db = tmp_path / "market.db"
