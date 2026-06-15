@@ -47,6 +47,41 @@ def _check_database() -> tuple[bool, str]:
     return _status(bool(tables), "Database", f"{db_path} ({len(tables)} tables)")
 
 
+def _check_data_freshness(max_stale_days: int = 7) -> tuple[bool, str]:
+    """Beyond 'the DB has tables': is stock_prices actually populated, and how
+    stale is it? An empty-but-existing DB passes the Database check yet can't
+    drive signals - flag it. Reports the latest bar date and its age."""
+    db_path = Path(get_db_path())
+    if not db_path.exists():
+        return _status(True, "Data freshness", "n/a (no database yet)")
+    try:
+        conn = sqlite3.connect(str(db_path))
+        try:
+            row = conn.execute(
+                "SELECT MAX(date), COUNT(DISTINCT symbol) FROM stock_prices"
+            ).fetchone()
+        finally:
+            conn.close()
+    except Exception as exc:
+        return _status(True, "Data freshness", f"could not query stock_prices: {exc}")
+
+    latest, symbols = (row or (None, 0))
+    if not latest:
+        return _status(False, "Data freshness", "stock_prices is empty; run python setup_data.py")
+    try:
+        from datetime import date, datetime
+
+        latest_d = datetime.strptime(str(latest)[:10], "%Y-%m-%d").date()
+        age = (date.today() - latest_d).days
+    except ValueError:
+        return _status(True, "Data freshness", f"latest={latest} ({symbols} symbols)")
+
+    detail = f"latest {latest_d.isoformat()} ({age}d ago), {symbols} symbols"
+    if age > max_stale_days:
+        detail += f" [STALE > {max_stale_days}d]"
+    return _status(True, "Data freshness", detail)
+
+
 def _check_runtime_writable() -> tuple[bool, str]:
     runtime = ensure_dir(get_runtime_dir(__file__))
     probe = runtime / ".windows_preflight_write_test"
@@ -68,11 +103,19 @@ def _check_timezone() -> tuple[bool, str]:
 
 
 def _check_optional_agents() -> tuple[bool, str]:
-    ollama = shutil.which("ollama")
-    mlx = importlib.util.find_spec("mlx_vlm")
-    bits = []
-    bits.append(f"ollama={'yes' if ollama else 'no'}")
-    bits.append(f"mlx_vlm={'yes' if mlx else 'no'}")
+    """Report which optional agent backends are available, in sync with the
+    selectable presets (ollama / gemma-mlx / claude CLI / claude_sdk). Always
+    informational - none is required to launch the dashboard."""
+
+    def _yes_no(present: object) -> str:
+        return "yes" if present else "no"
+
+    bits = [
+        f"ollama={_yes_no(shutil.which('ollama'))}",
+        f"mlx_vlm={_yes_no(importlib.util.find_spec('mlx_vlm'))}",
+        f"claude_cli={_yes_no(shutil.which('claude'))}",
+        f"claude_sdk={_yes_no(importlib.util.find_spec('claude_agent_sdk'))}",
+    ]
     return _status(True, "Optional agents", ", ".join(bits))
 
 
@@ -81,6 +124,7 @@ def main() -> int:
         _check_python(),
         _check_git(),
         _check_database(),
+        _check_data_freshness(),
         _check_runtime_writable(),
         _check_timezone(),
         _check_optional_agents(),
