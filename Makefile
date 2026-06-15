@@ -48,3 +48,19 @@ gemma-agent-ask:
 	NEPSE_AGENT_BACKEND=gemma4_mlx \
 	NEPSE_AGENT_FALLBACK_BACKEND=claude \
 	$(PYTHON) scripts/agents/run_gemma_agent.py --question "$(Q)"
+
+# --- Agent operator CLIs (see docs/agent_clis.md) ---
+.PHONY: agent agent-status agent-doctor agent-use
+
+agent:
+	$(PYTHON) -m scripts.agent $(ARGS)
+
+agent-status:
+	$(PYTHON) -m scripts.agent status $(ARGS)
+
+agent-doctor:
+	$(PYTHON) -m scripts.agent doctor $(ARGS)
+
+agent-use:
+	@if [ -z "$(PRESET)" ]; then echo "Usage: make agent-use PRESET=claude_sdk [MODEL=opus]"; exit 1; fi
+	$(PYTHON) -m scripts.agent use $(PRESET) $(if $(MODEL),--model $(MODEL),)
