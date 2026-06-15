@@ -263,6 +263,98 @@ def _call_claude(prompt: str, system: str = SYSTEM_PROMPT, max_tokens: int = DEF
         return "ERROR: claude CLI not found"
 
 
+def _call_claude_sdk(prompt: str, system: str = SYSTEM_PROMPT, max_tokens: int = DEFAULT_AGENT_MAX_TOKENS) -> str:
+    """Call Claude in-process via the Claude Agent SDK (reuses `claude login` creds)."""
+    try:
+        from claude_agent_sdk import query, ClaudeAgentOptions
+    except ImportError:
+        return "ERROR: claude-agent-sdk not installed (pip install claude-agent-sdk)"
+
+    cfg = load_active_agent_config()
+    model = str(cfg.get("model") or "sonnet").strip() or "sonnet"
+
+    try:
+        import anyio
+    except ImportError:
+        return "ERROR: anyio not installed (required by claude-agent-sdk)"
+
+    options = ClaudeAgentOptions(
+        system_prompt=system,
+        model=model,
+        allowed_tools=[],
+        permission_mode="bypassPermissions",
+        max_turns=1,
+    )
+
+    async def _run() -> str:
+        chunks: list[str] = []
+        async for msg in query(prompt=prompt, options=options):
+            for block in getattr(msg, "content", []) or []:
+                text = getattr(block, "text", None)
+                if text:
+                    chunks.append(text)
+        return "".join(chunks)
+
+    try:
+        out = _run_coro_blocking(anyio, _run)
+    except Exception as exc:
+        return _claude_sdk_error_message(exc)
+
+    return (out or "").strip() or "ERROR: Claude SDK returned empty response"
+
+
+def _claude_sdk_error_message(exc: BaseException) -> str:
+    """Turn a raw Claude Agent SDK failure into an actionable, fix-it message.
+
+    The SDK drives the `claude` CLI subprocess, so the two first-run failures are
+    a missing CLI and a logged-out session. Both otherwise surface as an opaque
+    stack string; map them to the exact command that fixes them. Heuristic on the
+    message text so it stays robust across SDK versions (no dependency on internal
+    exception class names).
+    """
+    msg = str(exc).lower()
+    if any(s in msg for s in ("not found", "no such file", "command not found", "enoent", "cannot find")):
+        return (
+            "ERROR: Claude SDK could not find the `claude` CLI. Install it with "
+            "`npm install -g @anthropic-ai/claude-code`, then run `claude login`."
+        )
+    if any(s in msg for s in ("login", "logged in", "log in", "auth", "credential", "unauthor", "401", "403")):
+        return "ERROR: Claude SDK is not authenticated. Run `claude login` in a terminal and retry."
+    return f"ERROR: Claude SDK call failed: {exc}"
+
+
+def _run_coro_blocking(anyio, coro_fn):
+    """Run an async coroutine factory to completion from sync code.
+
+    The TUI calls agents from ``@work(thread=True)`` worker threads (no running
+    event loop), where ``anyio.run`` is fine. But if invoked from a thread that
+    already owns a running loop (an async caller), ``anyio.run`` raises
+    ``RuntimeError``. In that case, run the coroutine on a dedicated thread with
+    its own loop so the SDK backend works from any context.
+    """
+    import asyncio
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return anyio.run(coro_fn)  # no loop in this thread — safe
+
+    box: dict = {}
+
+    def _worker() -> None:
+        try:
+            box["result"] = anyio.run(coro_fn)
+        except BaseException as exc:  # noqa: BLE001 - re-raised to the caller below
+            box["error"] = exc
+
+    thread = threading.Thread(target=_worker, daemon=True)
+    thread.start()
+    thread.join()
+    if "error" in box:
+        raise box["error"]
+    return box.get("result")
+
+
 def _load_gemma4_mlx():
     global _MLX_MODEL, _MLX_PROCESSOR, _MLX_MODEL_ID
 
@@ -363,9 +455,15 @@ def _call_primary_agent(prompt: str, system: str = SYSTEM_PROMPT, max_tokens: in
             fallback_response = _call_claude(prompt, system=system, max_tokens=max_tokens)
             if not str(fallback_response).startswith("ERROR:"):
                 return fallback_response
+        if fallback == "claude_sdk":
+            fallback_response = _call_claude_sdk(prompt, system=system, max_tokens=max_tokens)
+            if not str(fallback_response).startswith("ERROR:"):
+                return fallback_response
         return response
     if backend == "ollama":
         return _call_ollama(prompt, system=system, max_tokens=max_tokens)
+    if backend == "claude_sdk":
+        return _call_claude_sdk(prompt, system=system, max_tokens=max_tokens)
     return _call_claude(prompt, system=system, max_tokens=max_tokens)
 
 

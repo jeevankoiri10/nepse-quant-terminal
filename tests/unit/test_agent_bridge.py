@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from backend.agents.agent_analyst import (
     _analysis_cache_is_fresh,
     _build_analysis_source_packets,
@@ -702,3 +704,104 @@ def test_directional_market_question_detection_and_fallback():
 
     assert answer.startswith("Base case:")
     assert "pressure" in answer
+
+
+def test_call_claude_sdk_returns_install_hint_when_missing(monkeypatch):
+    """If claude-agent-sdk is not installed, the call returns a friendly install hint."""
+    import sys
+
+    from backend.agents import agent_analyst
+
+    monkeypatch.setitem(sys.modules, "claude_agent_sdk", None)
+
+    result = agent_analyst._call_claude_sdk("hello")
+
+    assert result.startswith("ERROR:")
+    assert "claude-agent-sdk" in result
+    assert "pip install" in result
+
+
+def test_call_primary_agent_routes_to_claude_sdk(monkeypatch):
+    """When backend == 'claude_sdk', _call_primary_agent must dispatch to _call_claude_sdk."""
+    from backend.agents import agent_analyst
+
+    monkeypatch.setattr(agent_analyst, "_agent_backend", lambda: "claude_sdk")
+    captured = {}
+
+    def _fake_sdk(prompt, system=agent_analyst.SYSTEM_PROMPT, max_tokens=agent_analyst.DEFAULT_AGENT_MAX_TOKENS):
+        captured["prompt"] = prompt
+        captured["max_tokens"] = max_tokens
+        return "SDK_RESPONSE_OK"
+
+    def _fail_if_called(*_a, **_kw):
+        raise AssertionError("CLI _call_claude must not run when backend=claude_sdk")
+
+    monkeypatch.setattr(agent_analyst, "_call_claude_sdk", _fake_sdk)
+    monkeypatch.setattr(agent_analyst, "_call_claude", _fail_if_called)
+
+    out = agent_analyst._call_primary_agent("ping")
+
+    assert out == "SDK_RESPONSE_OK"
+    assert captured["prompt"] == "ping"
+
+
+def test_run_coro_blocking_works_with_and_without_running_loop():
+    """_run_coro_blocking must complete whether or not the calling thread already
+    owns a running event loop — the TUI calls from worker threads (no loop), but
+    an async caller would otherwise make anyio.run() raise."""
+    import asyncio
+
+    import anyio
+
+    from backend.agents import agent_analyst
+
+    async def _make() -> str:
+        return "ok-value"
+
+    # No running loop (plain sync call path — the TUI worker-thread case)
+    assert agent_analyst._run_coro_blocking(anyio, _make) == "ok-value"
+
+    # Running loop present (async caller path): the helper must still return,
+    # not raise "asyncio.run() cannot be called from a running event loop".
+    async def _from_async() -> str:
+        return agent_analyst._run_coro_blocking(anyio, _make)
+
+    assert asyncio.run(_from_async()) == "ok-value"
+
+
+def test_run_coro_blocking_propagates_errors():
+    import anyio
+
+    from backend.agents import agent_analyst
+
+    async def _boom() -> str:
+        raise ValueError("kaboom")
+
+    with pytest.raises(ValueError, match="kaboom"):
+        agent_analyst._run_coro_blocking(anyio, _boom)
+
+
+def test_claude_sdk_error_message_maps_missing_cli():
+    from backend.agents import agent_analyst
+
+    out = agent_analyst._claude_sdk_error_message(
+        FileNotFoundError("[Errno 2] No such file or directory: 'claude'")
+    )
+    assert out.startswith("ERROR:")
+    assert "npm install -g @anthropic-ai/claude-code" in out
+
+
+def test_claude_sdk_error_message_maps_auth_failure():
+    from backend.agents import agent_analyst
+
+    out = agent_analyst._claude_sdk_error_message(RuntimeError("Not logged in: run claude login"))
+    assert out.startswith("ERROR:")
+    assert "claude login" in out
+    assert "npm install" not in out  # auth path, not the install path
+
+
+def test_claude_sdk_error_message_falls_back_for_unknown():
+    from backend.agents import agent_analyst
+
+    out = agent_analyst._claude_sdk_error_message(ValueError("some other failure"))
+    assert out == "ERROR: Claude SDK call failed: some other failure"
